@@ -1,87 +1,301 @@
-# Drosera Trap Foundry Template
+# Vault TVL Drop Trap
 
-This repo is for quickly bootstrapping a new Drosera project. It includes instructions for creating your first trap, deploying it to the Drosera network, and updating it on the fly.
+A Drosera Trap that monitors vault Total Value Locked (TVL) and detects significant drops that could indicate exploits or mass withdrawals.
 
-[![view - Documentation](https://img.shields.io/badge/view-Documentation-blue?style=for-the-badge)](https://dev.drosera.io "Project documentation")
+## Overview
 
-## Configure dev environment
+This trap continuously monitors a specified vault contract and triggers an alert when the TVL drops by more than 20% within a 3-block period. This provides an early warning system for potential vault exploits or unusual withdrawal activity.
+
+## How It Works
+
+### Collect Function
+- Reads `totalAssets()` or `totalSupply()` from the monitored vault
+- Returns current TVL and block number
+- Handles fallback between different vault interface methods
+
+### ShouldRespond Function
+- Analyzes historical TVL data from the last 3 blocks
+- Calculates percentage drop between current and historical values
+- Triggers response if drop exceeds 20% threshold
+- Returns detailed message with drop percentage and TVL values
+
+## Key Features
+
+- **Real-time Monitoring**: Continuously tracks vault TVL every block
+- **Configurable Threshold**: Currently set to 20% drop detection
+- **Historical Analysis**: Compares current TVL with data from 2 blocks ago
+- **Detailed Reporting**: Provides comprehensive incident details
+- **Fallback Support**: Works with both `totalAssets()` and `totalSupply()` interfaces
+
+## Configuration
+
+### Trap Settings
+- **Block Sample Size**: 3 blocks
+- **Drop Threshold**: 20%
+- **Cooldown Period**: 10 blocks
+- **Min Operators**: 1
+- **Max Operators**: 2
+
+### Monitored Vault
+- **Address**: `0x8cD9E6B7B4472e3d89abeBB902843BaC8f9b7b78` (MockVault for testing)
+- **Interface**: ERC4626-like vault with `totalAssets()` function
+
+## Setup Instructions
+
+### Prerequisites
+- Ubuntu/Linux environment
+- Docker installed
+- Foundry toolkit
+- Drosera CLI
+- Private key with Hoodi testnet ETH
+
+### 1. Clone and Setup Project
 
 ```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
+mkdir ~/vault-tvl-drop-trap
+cd ~/vault-tvl-drop-trap
+forge init --template drosera-network/trap-foundry-template .
+```
 
-# The trap-foundry-template utilizes node modules for dependency management
-# install Bun (optional)
-curl -fsSL https://bun.sh/install | bash
+### 2. Install Dependencies
 
-# install node modules
+```bash
 bun install
-
-# install vscode (optional)
-# - add solidity extension JuanBlanco.solidity
-
-# install drosera-cli
-curl -L https://app.drosera.io/install | bash
-droseraup
 ```
 
-open the VScode preferences and Select `Soldity: Change workpace compiler version (Remote)`
+Update `package.json`:
+```json
+{
+  "name": "@trap-examples/defi-automation/vault-tvl-drop-trap",
+  "version": "1.0.0",
+  "devDependencies": {
+    "forge-std": "github:foundry-rs/forge-std#v1.8.1",
+    "@openzeppelin/contracts": "4.9.0"
+  },
+  "dependencies": {
+    "contracts": "https://github.com/drosera-network/contracts"
+  }
+}
+```
 
-Select version `0.8.12`
+### 3. Configure Foundry
 
-## Quick Start
-
-### Hello World Trap
-
-The drosera.toml file is configured to deploy a simple "Hello, World!" trap. Ensure the drosera.toml file is set to the following configuration:
-
+Update `foundry.toml`:
 ```toml
-response_contract = "0xdA890040Af0533D98B9F5f8FE3537720ABf83B0C"
-response_function = "helloworld(string)"
+[profile.default]
+src = "src"
+out = "out"
+libs = ["node_modules", "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/"]
+
+[rpc_endpoints]
+mainnet = "https://eth.llamarpc.com"
 ```
 
-To deploy the trap, run the following commands:
+### 4. Deploy Mock Vault (for testing)
 
 ```bash
-# Compile the Trap
-forge build
-
-# Deploy the Trap
-DROSERA_PRIVATE_KEY=0x.. drosera apply
+forge create src/MockVault.sol:MockVault \
+  --rpc-url YOUR_RPC_URL \
+  --private-key YOUR_PRIVATE_KEY \
+  --constructor-args 1000000000000000000000 \
+  --broadcast
 ```
 
-After successfully deploying the trap, the CLI will add an `address` field to the `drosera.toml` file.
+### 5. Configure Trap
 
-Congratulations! You have successfully deployed your first trap!
-
-### Response Trap
-
-You can then update the trap by changing its logic and recompling it or changing the path field in the `drosera.toml` file to point to the Response Trap.
-
-The Response Trap is designed to trigger a response at a specific block number. To test the Response Trap, pick a future block number and update the Response Trap.
-Specify a response contract address and function signature in the drosera.toml file to the following:
-
+Update `drosera.toml`:
 ```toml
-response_contract = "0x183D78491555cb69B68d2354F7373cc2632508C7"
-response_function = "responseCallback(uint256)"
+ethereum_rpc = "YOUR_RPC_URL"
+drosera_rpc = "https://relay.hoodi.drosera.io"
+eth_chain_id = 560048
+drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+
+[traps]
+
+[traps.vaulttvldrop]
+path = "out/VaultTVLDropTrap.sol/VaultTVLDropTrap.json"
+response_contract = "YOUR_VAULT_ADDRESS"
+response_function = "handleVaultDrop(string)"
+cooldown_period_blocks = 10
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 3
+private_trap = true
+whitelist = ["YOUR_OPERATOR_WALLET_ADDRESS"]
 ```
 
-Finally, deploy the Response Trap by running the following commands:
+### 6. Deploy Trap
 
 ```bash
-# Compile the Trap
-forge build
-
-# Deploy the Trap
-DROSERA_PRIVATE_KEY=0x.. drosera apply
+DROSERA_PRIVATE_KEY=your_private_key drosera apply --eth-rpc-url YOUR_RPC_URL
 ```
 
-> Note: The `DROSERA_PRIVATE_KEY` environment variable can be used to deploy traps. You can also set it in the drosera.toml file as `private_key = "0x.."`.
+### 7. Setup Operator
+
+Create `docker-compose.yaml`:
+```yaml
+version: '3.8'
+
+services:
+  drosera-operator:
+    image: ghcr.io/drosera-network/drosera-operator:latest
+    container_name: drosera-operator
+    ports:
+      - "31313:31313"
+      - "31314:31314"
+    environment:
+      - DRO__DB_FILE_PATH=/data/drosera.db
+      - DRO__DROSERA_ADDRESS=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
+      - DRO__LISTEN_ADDRESS=0.0.0.0
+      - DRO__DISABLE_DNR_CONFIRMATION=true
+      - DRO__ETH__CHAIN_ID=560048
+      - DRO__ETH__RPC_URL=YOUR_RPC_URL
+      - DRO__ETH__BACKUP_RPC_URL=https://rpc.hoodi.ethpandaops.io
+      - DRO__ETH__PRIVATE_KEY=${ETH_PRIVATE_KEY}
+      - DRO__NETWORK__P2P_PORT=31313
+      - DRO__NETWORK__EXTERNAL_P2P_ADDRESS=${VPS_IP}
+      - DRO__SERVER__PORT=31314
+      - RUST_LOG=info,drosera_operator=debug
+    volumes:
+      - drosera_data:/data
+    restart: always
+    command: node
+
+volumes:
+  drosera_data:
+```
+
+Create `.env`:
+```env
+ETH_PRIVATE_KEY=your_operator_private_key
+VPS_IP=your_vps_public_ip
+```
+
+### 8. Start Operator
+
+```bash
+docker compose up -d
+```
+
+### 9. Register and Opt-in
+
+```bash
+# Register operator
+drosera-operator register \
+  --eth-rpc-url YOUR_RPC_URL \
+  --eth-private-key YOUR_PRIVATE_KEY \
+  --drosera-address 0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
+
+# Opt-in to trap
+drosera-operator optin \
+  --eth-rpc-url YOUR_RPC_URL \
+  --eth-private-key YOUR_PRIVATE_KEY \
+  --trap-config-address YOUR_TRAP_CONFIG_ADDRESS
+```
 
 ## Testing
 
-Example tests are included in the `tests` directory. They simulate how Drosera Operators execute traps and determine if a response should be triggered. To run the tests, execute the following command:
+### Trigger TVL Drop
+
+To test the trap, reduce the vault's TVL by more than 20%:
 
 ```bash
-forge test
+# Reduce TVL from 1000 to 700 (30% drop)
+cast send YOUR_VAULT_ADDRESS "setTotalAssets(uint256)" 700000000000000000000 \
+  --rpc-url YOUR_RPC_URL \
+  --private-key YOUR_PRIVATE_KEY
 ```
+
+### Monitor Logs
+
+```bash
+docker compose logs -f drosera-operator | grep "YOUR_TRAP_ADDRESS"
+```
+
+Look for:
+- `ShouldRespond='true'` - Trap detected the drop
+- `Successfully submitted claim` - Response executed
+- `Cooldown period is active` - Trap entered cooldown
+
+## Contract Addresses
+
+### Hoodi Testnet
+- **Drosera Core**: `0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D`
+- **Mock Vault**: `0x8cD9E6B7B4472e3d89abeBB902843BaC8f9b7b78`
+- **Trap Config**: `0xf479C47Aabc05c2eD86A10ECfff27743BFF10550`
+
+## Monitoring
+
+### Dashboard
+- **Drosera App**: https://app.drosera.io/
+- **Network**: Hoodi Testnet
+- **Chain ID**: 560048
+
+### Key Metrics
+- Operator status (Green = Active)
+- Trap execution frequency
+- Response success rate
+- Historical TVL data
+
+## Customization
+
+### Adjust Detection Threshold
+
+Modify the percentage threshold in `VaultTVLDropTrap.sol`:
+```solidity
+// Change from 20% to desired threshold
+if (dropPercentage > 30) { // 30% threshold
+    // Trigger response
+}
+```
+
+### Monitor Different Vaults
+
+Update the hardcoded vault address:
+```solidity
+address public constant VAULT_ADDRESS = 0xYourVaultAddress;
+```
+
+### Custom Response Actions
+
+Implement your own response contract with `handleVaultDrop(string)` function to take specific actions when the trap triggers.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Trap not responding**: Check vault address is correct and accessible
+2. **Operator offline**: Verify firewall settings for ports 31313/31314
+3. **Insufficient data**: Wait 3+ blocks for historical data collection
+4. **RPC issues**: Ensure RPC endpoint is stable and accessible
+
+### Debug Commands
+
+```bash
+# Check vault TVL
+cast call VAULT_ADDRESS "totalAssets()" --rpc-url YOUR_RPC_URL
+
+# Check operator logs
+docker compose logs --tail=50 drosera-operator
+
+# Verify trap deployment
+cast code TRAP_CONFIG_ADDRESS --rpc-url YOUR_RPC_URL
+```
+
+## Security Considerations
+
+- Use separate private keys for testing vs production
+- Monitor operator uptime and connectivity
+- Regularly verify trap logic with test scenarios
+- Keep RPC endpoints secure and reliable
+
+## License
+
+MIT License - see LICENSE file for details.
+
+## Support
+
+For issues and questions:
+- Drosera Documentation: https://docs.drosera.io/
+- GitHub Issues: Create an issue in this repository
+- Community Discord: Join the Drosera community

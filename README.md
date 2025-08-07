@@ -298,4 +298,4 @@ MIT License - see LICENSE file for details.
 For issues and questions:
 - Drosera Documentation: https://dev.drosera.io/
 - GitHub Issues: Create an issue in this repository
-- Community Discord: Join the Drosera community
+- Community Discord: https://discord.gg/drosera

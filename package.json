@@ -1,8 +1,9 @@
 {
-  "name": "trap-foundry-template",
+  "name": "@trap-examples/defi-automation/vault-tvl-drop-trap",
+  "version": "1.0.0",
   "devDependencies": {
-    "@types/bun": "latest",
-    "forge-std": "github:foundry-rs/forge-std#v1.8.1"
+    "forge-std": "github:foundry-rs/forge-std#v1.8.1",
+    "@openzeppelin/contracts": "4.9.0"
   },
   "dependencies": {
     "contracts": "https://github.com/drosera-network/contracts"

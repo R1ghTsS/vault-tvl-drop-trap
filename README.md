@@ -296,6 +296,6 @@ MIT License - see LICENSE file for details.
 ## Support
 
 For issues and questions:
-- Drosera Documentation: https://docs.drosera.io/
+- Drosera Documentation: https://dev.drosera.io/
 - GitHub Issues: Create an issue in this repository
 - Community Discord: Join the Drosera community

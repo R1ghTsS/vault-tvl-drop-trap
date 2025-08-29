@@ -3,3 +3,13 @@
 .env
 .env.*
 *.key
+
+# build & deps
+node_modules/
+out/
+cache/
+broadcast/
+# secrets
+.env
+.env.*
+*.key

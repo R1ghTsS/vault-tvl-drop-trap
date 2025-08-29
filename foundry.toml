@@ -2,6 +2,3 @@
 src = "src"
 out = "out"
 libs = ["node_modules", "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/"]
-
-[rpc_endpoints]
-mainnet = "https://eth.llamarpc.com"

@@ -2,24 +2,20 @@
 pragma solidity ^0.8.20;
 
 contract MockVault {
-    uint256 public currentTotalAssets;
+    uint256 private _assets;
+    event AssetsSet(uint256 value);
 
     constructor(uint256 initialAssets) {
-        currentTotalAssets = initialAssets;
+        _assets = initialAssets;
     }
 
-    // Mimics the totalAssets() function for your Trap
     function totalAssets() external view returns (uint256) {
-        return currentTotalAssets;
+        return _assets;
     }
 
-    // Mimics the totalSupply() function (if your Trap uses it as fallback)
-    function totalSupply() external view returns (uint256) {
-        return currentTotalAssets;
-    }
-
-    // Function to manually set the total assets for testing
+    // Testing helper to simulate deposits/withdrawals
     function setTotalAssets(uint256 newAssets) external {
-        currentTotalAssets = newAssets;
+        _assets = newAssets;
+        emit AssetsSet(newAssets);
     }
 }

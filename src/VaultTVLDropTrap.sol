@@ -1,84 +1,121 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {ITrap} from "drosera-contracts/interfaces/ITrap.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-
-// Define an interface for the vault contract you want to monitor
 interface IVault {
     function totalAssets() external view returns (uint256);
-    function totalSupply() external view returns (uint256);
 }
 
-contract VaultTVLDropTrap is ITrap {
-    // Hardcode the vault address you want to monitor
-    // Replace this with your actual Mock Vault address
-    address public constant VAULT_ADDRESS = 0x8cD9E6B7B4472e3d89abeBB902843BaC8f9b7b78;
-
-    // collect() is called by Drosera Operators to get current data
-    function collect() external view returns (bytes memory) {
-        IVault vault = IVault(VAULT_ADDRESS);
-        uint256 currentTVL;
-        try vault.totalAssets() returns (uint256 assets) {
-            currentTVL = assets;
-        } catch {
-            try IVault(VAULT_ADDRESS).totalSupply() returns (uint256 supply) {
-                currentTVL = supply;
-            } catch {
-                currentTVL = 0;
-            }
-        }
-        // Return current TVL and current block number
-        return abi.encode(currentTVL, block.number);
+/// @title VaultTVLDropTrap
+/// @notice Test-only Drosera Trap that flags a TVL drop vs the peak observed in the sample window.
+contract VaultTVLDropTrap {
+    struct CollectOutput {
+        uint256 blockNumber;
+        uint256 assets;
     }
 
-    // shouldRespond() must be pure as per ITrap interface
-    // It will analyze the 'data' array which contains historical 'collect' outputs
-    function shouldRespond(bytes[] calldata data) external pure returns (bool, bytes memory) {
-        // Ensure we have enough data points (at least 3 for current, 1 block ago, 2 blocks ago)
-        // data[0] is the most recent collect() output
-        // data[1] is the collect() output from 1 block_sample_size ago
-        // data[2] is the collect() output from 2 block_sample_size ago
-        if (data.length < 3) {
-            return (false, bytes("Not enough historical data points collected."));
+    // ======= CONFIG (edit these before build) =======
+    // Mock vault from the example README. Replace with your own for testing.
+    address public constant VAULT = 0x9E6d5A38127304256bA1583ff78e4373c3c58DAb;
+
+    // Drop threshold in basis points (1% = 100 bps). Default 5% (500 bps).
+    uint256 public constant DROP_THRESHOLD_BPS = 500;
+
+    // Optional absolute-drop floor in asset units; set to 0 to disable.
+    // This prevents firing on tiny TVL values or very small noise.
+    uint256 public constant MIN_ABSOLUTE_DROP = 0;
+
+    uint256 private constant BPS_DENOMINATOR = 10_000;
+
+    constructor() {}
+
+    /// @notice Collect current TVL.
+    /// @return Encoded CollectOutput {blockNumber, assets}
+    function collect() external view returns (bytes memory) {
+        uint256 assets = _readAssets(VAULT);
+        return abi.encode(CollectOutput({blockNumber: block.number, assets: assets}));
+    }
+
+    /// @notice Decide if an incident should trigger.
+    /// @dev data[0] is assumed to be the most recent sample; scans entire window for peak->current drop.
+    /// @param data Encoded CollectOutput[] from latest N blocks
+    /// @return triggered True if drop >= threshold
+    /// @return details Encoded incident message (string bytes)
+    function shouldRespond(bytes[] calldata data) external pure returns (bool triggered, bytes memory details) {
+        uint256 n = data.length;
+        if (n < 2) {
+            return (false, bytes("insufficient samples"));
         }
 
-        // Decode the most recent TVL and block number
-        (uint256 currentTVL, uint256 currentBlock) = abi.decode(data[0], (uint256, uint256));
+        // Most recent sample
+        CollectOutput memory newest = abi.decode(data[0], (CollectOutput));
+        uint256 currentAssets = newest.assets;
+        uint256 newestBlock = newest.blockNumber;
+        uint256 oldestBlock = newestBlock;
 
-        // Decode the TVL and block number from 2 block_sample_size ago
-        (uint256 twoBlocksAgoTVL, uint256 twoBlocksAgoBlock) = abi.decode(data[2], (uint256, uint256));
-
-        // Basic validation: ensure blocks are sequential and not zero
-        if (currentTVL == 0 || twoBlocksAgoTVL == 0 || currentBlock == 0 || twoBlocksAgoBlock == 0) {
-            return (false, bytes("Invalid TVL or block data."));
+        // Find peak assets across the whole window and min/max block numbers for context
+        uint256 peakAssets = currentAssets;
+        for (uint256 i = 0; i < n; i++) {
+            CollectOutput memory s = abi.decode(data[i], (CollectOutput));
+            if (s.assets > peakAssets) peakAssets = s.assets;
+            if (s.blockNumber < oldestBlock) oldestBlock = s.blockNumber;
+            if (s.blockNumber > newestBlock) newestBlock = s.blockNumber;
         }
 
-        // Calculate the percentage drop
-        uint256 dropPercentage;
-        if (currentTVL < twoBlocksAgoTVL) {
-            dropPercentage = ((twoBlocksAgoTVL - currentTVL) * 100) / twoBlocksAgoTVL;
-        } else {
-            dropPercentage = 0; // No drop or TVL increased
+        // Nothing to compare or no drop
+        if (peakAssets == 0 || currentAssets >= peakAssets) {
+            return (false, bytes(""));
         }
 
-        // Check if the drop is more than 20%
-        if (dropPercentage > 20) {
-            string memory message = string.concat(
-                "Vault TVL dropped by ",
-                Strings.toString(dropPercentage),
-                "% in ",
-                Strings.toString(currentBlock - twoBlocksAgoBlock), // Actual block difference
-                " blocks. Current TVL: ",
-                Strings.toString(currentTVL),
-                ", TVL at block ",
-                Strings.toString(twoBlocksAgoBlock),
-                ": ",
-                Strings.toString(twoBlocksAgoTVL)
+        uint256 absDrop = peakAssets - currentAssets;
+
+        // Optional absolute floor to avoid noise on tiny numbers
+        if (MIN_ABSOLUTE_DROP > 0 && absDrop < MIN_ABSOLUTE_DROP) {
+            return (false, bytes(""));
+        }
+
+        uint256 dropBps = (absDrop * BPS_DENOMINATOR) / peakAssets;
+
+        if (dropBps >= DROP_THRESHOLD_BPS) {
+            // Human-readable message packed as bytes (string)
+            bytes memory msgBytes = abi.encodePacked(
+                "TVL drop detected: ",
+                _u(dropBps), " bps (", _u(absDrop), " units) from ",
+                _u(peakAssets), " to ", _u(currentAssets),
+                " across blocks ", _u(oldestBlock), "->", _u(newestBlock),
+                "; samples=", _u(n)
             );
-            return (true, abi.encode(message));
+            return (true, msgBytes);
         }
 
-        return (false, bytes("Vault TVL drop not significant enough."));
+        return (false, bytes(""));
+    }
+
+    // ======= internals =======
+
+    function _readAssets(address a) internal view returns (uint256) {
+        // Try ERC-4626 totalAssets()
+        (bool ok, bytes memory ret) = a.staticcall(abi.encodeWithSelector(IVault.totalAssets.selector));
+        if (ok && ret.length >= 32) {
+            return abi.decode(ret, (uint256));
+        }
+        // Fallback: ERC-20 totalSupply() if vault lacks totalAssets()
+        (ok, ret) = a.staticcall(abi.encodeWithSignature("totalSupply()"));
+        require(ok && ret.length >= 32, "Vault: no assets/supply");
+        return abi.decode(ret, (uint256));
+    }
+
+    function _u(uint256 x) private pure returns (string memory) {
+        if (x == 0) return "0";
+        uint256 j = x;
+        uint256 len;
+        while (j != 0) { len++; j /= 10; }
+        bytes memory b = new bytes(len);
+        uint256 k = len;
+        while (x != 0) {
+            k--;
+            b[k] = bytes1(uint8(48 + x % 10));
+            x /= 10;
+        }
+        return string(b);
     }
 }

@@ -2,9 +2,11 @@
 pragma solidity ^0.8.20;
 
 contract VaultTVLResponse {
-    event DiscordTag(string tag);
+    event VaultDrop(string details);
 
-    function respondWithDiscordName(string memory tag) external {
-        emit DiscordTag(tag);
+    // The Drosera Operator will call this when the Trap returns shouldRespond=true
+    function handleVaultDrop(string calldata details) external {
+        emit VaultDrop(details);
+        // For real protocols: pause(), circuit-breaker, ACL-guarded actions, etc.
     }
 }

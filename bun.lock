@@ -1,0 +1,22 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@trap-examples/defi-automation/vault-tvl-drop-trap",
+      "dependencies": {
+        "contracts": "https://github.com/drosera-network/contracts",
+      },
+      "devDependencies": {
+        "@openzeppelin/contracts": "4.9.0",
+        "forge-std": "github:foundry-rs/forge-std#v1.8.1",
+      },
+    },
+  },
+  "packages": {
+    "@openzeppelin/contracts": ["@openzeppelin/contracts@4.9.0", "", {}, "sha512-DUP74AFGKlic2sQb/CmgrN2aUPMFGxRrmCTUxLHsiU2RzwWqVuMPZBxiAyvlff6Pea77uylAX6B5x9W6evEbhA=="],
+
+    "contracts": ["@drosera/contracts@github:drosera-network/contracts#1620415", {}, "drosera-network-contracts-1620415"],
+
+    "forge-std": ["forge-std@github:foundry-rs/forge-std#bb4ceea", {}, "foundry-rs-forge-std-bb4ceea"],
+  }
+}

@@ -1,157 +1,212 @@
-# Vault TVL Drop Trap
+# Vault TVL Drop Trap (Enhanced)
 
-A Drosera Trap that monitors vault Total Value Locked (TVL) and detects significant drops that could indicate exploits or mass withdrawals.
+A **Drosera Trap** that monitors a vault’s **Total Value Locked (TVL)** and triggers when the **current TVL falls from the recent peak by at least a threshold** (default **5%**) over a sampled block window. Built with **Foundry** and friendly to **private RPC** testing.
+
+> **What’s new vs the original**
+>
+> - Peak → current logic over a sliding window (not just a single look‑back)
+> - Human‑readable incident details (drop bps, absolute delta, window bounds, sample count)
+> - Safer “assets reader”: tries `totalAssets()` then falls back to `totalSupply()`
+> - Example response contract that emits `VaultDrop(string)`
+> - End‑to‑end steps for private RPC, operator, and verification
+
+---
 
 ## Overview
 
-This trap continuously monitors a specified vault contract and triggers an alert when the TVL drops by more than 20% within a 3-block period. This provides an early warning system for potential vault exploits or unusual withdrawal activity.
+This trap continuously samples a specified vault contract and **fires** when the TVL **drops by the configured threshold** within the recent sample window. Useful for early warning of mass withdrawals or exploits.
 
-## How It Works
+### How It Works
 
-### Collect Function
+**Collect Function**
 - Reads `totalAssets()` or `totalSupply()` from the monitored vault
-- Returns current TVL and block number
-- Handles fallback between different vault interface methods
+- Returns current TVL and the block number
+- Handles fallback between different vault interfaces
 
-### ShouldRespond Function
-- Analyzes historical TVL data from the last 3 blocks
-- Calculates percentage drop between current and historical values
-- Triggers response if drop exceeds 20% threshold
-- Returns detailed message with drop percentage and TVL values
+**ShouldRespond Function**
+- Scans all samples in the window to find **peak TVL**
+- Compares **current** vs **peak**; calculates **bps drop** and **absolute delta**
+- Triggers if `drop >= DROP_THRESHOLD_BPS` and (optionally) above `MIN_ABSOLUTE_DROP`
 
-## Key Features
+### Key Features
+- **Real-time sampling:** checks vault TVL every block via operator sampling
+- **Configurable threshold:** default **5%** (`DROP_THRESHOLD_BPS = 500`)
+- **Noise guard:** optional absolute floor `MIN_ABSOLUTE_DROP`
+- **Works with 4626 & ERC20-like vaults:** uses `totalAssets()` then `totalSupply()`
+- **Readable incidents:** clear message string with context (bps, deltas, blocks, samples)
 
-- **Real-time Monitoring**: Continuously tracks vault TVL every block
-- **Configurable Threshold**: Currently set to 20% drop detection
-- **Historical Analysis**: Compares current TVL with data from 2 blocks ago
-- **Detailed Reporting**: Provides comprehensive incident details
-- **Fallback Support**: Works with both `totalAssets()` and `totalSupply()` interfaces
+---
 
-## Configuration
+## Requirements
 
-### Trap Settings
-- **Block Sample Size**: 3 blocks
-- **Drop Threshold**: 20%
-- **Cooldown Period**: 10 blocks
-- **Min Operators**: 1
-- **Max Operators**: 2
+- **Foundry** (forge/cast/anvil/chisel)
+  ```bash
+  curl -L https://foundry.paradigm.xyz | bash
+  foundryup
+  ```
+- **Node 18+** (dev tooling only)
+- Access to an **Ethereum-compatible RPC** (public or your private one)
+- A funded **private key** for your target chain
 
-### Monitored Vault
-- **Address**: `0x8cD9E6B7B4472e3d89abeBB902843BaC8f9b7b78` (MockVault for testing)
-- **Interface**: ERC4626-like vault with `totalAssets()` function
+> Example values below assume **Hoodi testnet** style defaults — change if needed:
+> - Chain ID: `560048`
+> - Drosera relay: `0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D`
 
-## Setup Instructions
+---
 
-### Prerequisites
-- Ubuntu/Linux environment
-- Docker installed
-- Foundry toolkit
-- Drosera CLI
-- Private key with Hoodi testnet ETH
-
-### 1. Clone and Setup Project
+## 1) Get the code
 
 ```bash
-mkdir ~/vault-tvl-drop-trap
-cd ~/vault-tvl-drop-trap
-forge init --template drosera-network/trap-foundry-template .
+git clone https://github.com/R1ghTsS/vault-tvl-drop-trap.git
+cd vault-tvl-drop-trap
+forge build
 ```
 
-### 2. Install Dependencies
-
+Set environment you’ll reuse:
 ```bash
-bun install
+export RPC=http://127.0.0.1:8545        # or your private/public RPC
+export PK=0xYOUR_PRIVATE_KEY            # deployer EOA
+export DROSERA_ADDR=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
+export CHAIN_ID=560048
+unset FOUNDRY_DRY_RUN                   # make sure broadcasts are enabled
 ```
 
-Update `package.json`:
-```json
-{
-  "name": "@trap-examples/defi-automation/vault-tvl-drop-trap",
-  "version": "1.0.0",
-  "devDependencies": {
-    "forge-std": "github:foundry-rs/forge-std#v1.8.1",
-    "@openzeppelin/contracts": "4.9.0"
-  },
-  "dependencies": {
-    "contracts": "https://github.com/drosera-network/contracts"
-  }
-}
-```
+---
 
-### 3. Configure Foundry
+## 2) Contracts
 
-Update `foundry.toml`:
-```toml
-[profile.default]
-src = "src"
-out = "out"
-libs = ["node_modules", "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/"]
+- `src/MockVault.sol` – minimal test vault exposing `setTotalAssets(uint256)` and `totalAssets()`.
+- `src/VaultTVLDropTrap.sol` – **the trap**:
+  - `collect()` encodes `{blockNumber, assets}`
+  - `shouldRespond(bytes[] data)` finds **peak** in the window then compares with **current**
+  - **edit before build:** `VAULT`, `DROP_THRESHOLD_BPS`, `MIN_ABSOLUTE_DROP`
+- `src/VaultTVLResponse.sol` – sample response contract that emits:
+  ```solidity
+  event VaultDrop(string message);
+  ```
+  via `handleVaultDrop(string)`.
 
-[rpc_endpoints]
-mainnet = "https://eth.llamarpc.com"
-```
+---
 
-### 4. Deploy Mock Vault (for testing)
+## 3) Deploy locally / on your network
 
+### 3.1 Deploy a Mock Vault (for testing)
+
+**Option A – forge create**
 ```bash
 forge create src/MockVault.sol:MockVault \
-  --rpc-url YOUR_RPC_URL \
-  --private-key YOUR_PRIVATE_KEY \
-  --constructor-args 1000000000000000000000 \
-  --broadcast
+  --rpc-url $RPC \
+  --private-key $PK \
+  --constructor-args 1000e18 \
+  --broadcast --skip-simulation
 ```
 
-### 5. Configure Trap
+**Option B – cast send**
+```bash
+BYTECODE=$(jq -r '.bytecode.object' out/MockVault.sol/MockVault.json)
+ENCARGS=$(cast abi-encode "constructor(uint256)" 1000e18)
+INITCODE=${BYTECODE}${ENCARGS#0x}
 
-Update `drosera.toml`:
+cast send --create $INITCODE --rpc-url $RPC --private-key $PK
+```
+
+Save the address:
+```bash
+cast receipt <TX_HASH> --rpc-url $RPC | grep -Ei 'contractAddress|to'
+export VAULT=0x... # paste the MockVault address
+```
+
+Sanity check:
+```bash
+cast call $VAULT "totalAssets()(uint256)" --rpc-url $RPC
+```
+
+### 3.2 Deploy the Response contract
+
+```bash
+BYTECODE=$(jq -r '.bytecode.object' out/VaultTVLResponse.sol/VaultTVLResponse.json)
+cast send --create $BYTECODE --rpc-url $RPC --private-key $PK
+export RESP=$(cast receipt <TX_HASH> --rpc-url $RPC | awk '/contractAddress/{print $2}')
+```
+
+### 3.3 Configure & build the Trap
+
+Edit constants in **`src/VaultTVLDropTrap.sol`**:
+```solidity
+address public constant VAULT = 0xYourVaultHere;
+uint256 public constant DROP_THRESHOLD_BPS = 500; // 5%
+uint256 public constant MIN_ABSOLUTE_DROP = 0;    // optional
+```
+Then:
+```bash
+forge build
+```
+
+### 3.4 Create `drosera.toml` and apply
+
+`drosera.toml`:
 ```toml
-ethereum_rpc = "YOUR_RPC_URL"
-drosera_rpc = "https://relay.hoodi.drosera.io"
-eth_chain_id = 560048
-drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+ethereum_rpc    = "${RPC}"
+drosera_rpc     = "https://relay.hoodi.drosera.io"
+eth_chain_id    = ${CHAIN_ID}
+drosera_address = "${DROSERA_ADDR}"
 
 [traps]
 
 [traps.vaulttvldrop]
-path = "out/VaultTVLDropTrap.sol/VaultTVLDropTrap.json"
-response_contract = "YOUR_VAULT_ADDRESS"
-response_function = "handleVaultDrop(string)"
-cooldown_period_blocks = 10
+path                    = "out/VaultTVLDropTrap.sol/VaultTVLDropTrap.json"
+response_contract       = "${RESP}"
+response_function       = "handleVaultDrop(string)"
+cooldown_period_blocks  = 10
 min_number_of_operators = 1
 max_number_of_operators = 2
-block_sample_size = 3
-private_trap = true
-whitelist = ["YOUR_OPERATOR_WALLET_ADDRESS"]
+block_sample_size       = 10
+private_trap            = true
+whitelist               = ["0xYourEOAAllowed"]
 ```
 
-### 6. Deploy Trap
+> **TOML tip:** addresses must be quoted strings. Writing `response_contract = $RESP` (unquoted) will fail to parse.
 
+Apply:
 ```bash
-DROSERA_PRIVATE_KEY=your_private_key drosera apply --eth-rpc-url YOUR_RPC_URL
+export DROSERA_PRIVATE_KEY=$PK
+drosera apply --eth-rpc-url $RPC
+# output prints a "Trap Config" address:
+export TRAPCFG=0x... 
 ```
 
-### 7. Setup Operator
+### 3.5 Run an Operator (CLI or Docker)
 
-Create `docker-compose.yaml`:
+**Register & opt‑in (CLI):**
+```bash
+drosera-operator register \
+  --eth-rpc-url $RPC \
+  --eth-private-key <OPERATOR_PK> \
+  --drosera-address $DROSERA_ADDR
+
+drosera-operator optin \
+  --eth-rpc-url $RPC \
+  --eth-private-key <OPERATOR_PK> \
+  --trap-config-address $TRAPCFG
+```
+
+**Docker Compose** (example `~/Drosera-Network/docker-compose.yaml`):
 ```yaml
-version: '3.8'
-
 services:
   drosera-operator:
     image: ghcr.io/drosera-network/drosera-operator:latest
     container_name: drosera-operator
     ports:
-      - "31313:31313"
-      - "31314:31314"
+      - "31313:31313"   # P2P
+      - "31314:31314"   # HTTP/server
     environment:
       - DRO__DB_FILE_PATH=/data/drosera.db
-      - DRO__DROSERA_ADDRESS=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
+      - DRO__DROSERA_ADDRESS=${DROSERA_ADDR}
       - DRO__LISTEN_ADDRESS=0.0.0.0
       - DRO__DISABLE_DNR_CONFIRMATION=true
-      - DRO__ETH__CHAIN_ID=560048
-      - DRO__ETH__RPC_URL=YOUR_RPC_URL
-      - DRO__ETH__BACKUP_RPC_URL=https://rpc.hoodi.ethpandaops.io
-      - DRO__ETH__PRIVATE_KEY=${ETH_PRIVATE_KEY}
+      - DRO__ETH__CHAIN_ID=${CHAIN_ID}
+      - DRO__ETH__RPC_URL=${RPC}
+      - DRO__ETH__PRIVATE_KEY=${OPERATOR_PK}
       - DRO__NETWORK__P2P_PORT=31313
       - DRO__NETWORK__EXTERNAL_P2P_ADDRESS=${VPS_IP}
       - DRO__SERVER__PORT=31314
@@ -160,142 +215,87 @@ services:
       - drosera_data:/data
     restart: always
     command: node
-
 volumes:
-  drosera_data:
+  drosera_data: {}
 ```
-
-Create `.env`:
+`.env` beside compose file:
 ```env
-ETH_PRIVATE_KEY=your_operator_private_key
-VPS_IP=your_vps_public_ip
+RPC=http://127.0.0.1:8545
+OPERATOR_PK=0xYourOperatorKey
+DROSERA_ADDR=0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
+CHAIN_ID=560048
+VPS_IP=$(curl -s ifconfig.me)
 ```
 
-### 8. Start Operator
-
+Run:
 ```bash
-docker compose up -d
+docker compose up -d && docker compose logs -f drosera-operator
 ```
 
-### 9. Register and Opt-in
+You should see entries like:
+```
+ShouldRespond='true' trap_address=... block_number=...
+Pending Transaction Hash: 0x...
+Successfully submitted claim ...
+```
 
+---
+
+## 4) Test the alert end‑to‑end
+
+1. **Raise TVL** (optional):
+   ```bash
+   # either literal exponent or computed:
+   cast send $VAULT "setTotalAssets(uint256)" 1200e18 \
+     --rpc-url $RPC --private-key $PK
+   # or: cast send $VAULT "setTotalAssets(uint256)" $(cast --to-wei "1200 ether") ...
+   ```
+
+2. **Drop TVL** below threshold:
+   ```bash
+   cast send $VAULT "setTotalAssets(uint256)" 700e18 \
+     --rpc-url $RPC --private-key $PK
+   ```
+
+3. **Watch operator logs** – after a few blocks you should see `ShouldRespond='true'`
+   and a submission transaction.
+
+4. **Verify on‑chain** (see next section).
+
+---
+
+## 5) Read events & debug
+
+Read `VaultDrop(string)` events from the response contract (**Foundry ≥1.3 uses the positional signature**):
 ```bash
-# Register operator
-drosera-operator register \
-  --eth-rpc-url YOUR_RPC_URL \
-  --eth-private-key YOUR_PRIVATE_KEY \
-  --drosera-address 0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D
-
-# Opt-in to trap
-drosera-operator optin \
-  --eth-rpc-url YOUR_RPC_URL \
-  --eth-private-key YOUR_PRIVATE_KEY \
-  --trap-config-address YOUR_TRAP_CONFIG_ADDRESS
+LATEST=$(cast block-number --rpc-url $RPC)
+FROM=$((LATEST-50))
+cast logs --rpc-url $RPC --address $RESP --from-block $FROM --to-block $LATEST "VaultDrop(string)"
 ```
 
-## Testing
-
-### Trigger TVL Drop
-
-To test the trap, reduce the vault's TVL by more than 20%:
-
+Manual sanity emit:
 ```bash
-# Reduce TVL from 1000 to 700 (30% drop)
-cast send YOUR_VAULT_ADDRESS "setTotalAssets(uint256)" 700000000000000000000 \
-  --rpc-url YOUR_RPC_URL \
-  --private-key YOUR_PRIVATE_KEY
+cast send $RESP "handleVaultDrop(string)" "TVL drop test" --rpc-url $RPC --private-key $PK
 ```
 
-### Monitor Logs
-
+Other checks:
 ```bash
-docker compose logs -f drosera-operator | grep "YOUR_TRAP_ADDRESS"
+cast code $VAULT --rpc-url $RPC
+cast code $RESP  --rpc-url $RPC
+cast receipt 0x<submission_tx_hash> --rpc-url $RPC
 ```
 
-Look for:
-- `ShouldRespond='true'` - Trap detected the drop
-- `Successfully submitted claim` - Response executed
-- `Cooldown period is active` - Trap entered cooldown
-
-## Contract Addresses
-
-### Hoodi Testnet
-- **Drosera Core**: `0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D`
-- **Mock Vault**: `0x8cD9E6B7B4472e3d89abeBB902843BaC8f9b7b78`
-- **Trap Config**: `0xf479C47Aabc05c2eD86A10ECfff27743BFF10550`
-
-## Monitoring
-
-### Dashboard
-- **Drosera App**: https://app.drosera.io/
-- **Network**: Hoodi Testnet
-- **Chain ID**: 560048
-
-### Key Metrics
-- Operator status (Green = Active)
-- Trap execution frequency
-- Response success rate
-- Historical TVL data
-
-## Customization
-
-### Adjust Detection Threshold
-
-Modify the percentage threshold in `VaultTVLDropTrap.sol`:
-```solidity
-// Change from 20% to desired threshold
-if (dropPercentage > 30) { // 30% threshold
-    // Trigger response
-}
-```
-
-### Monitor Different Vaults
-
-Update the hardcoded vault address:
-```solidity
-address public constant VAULT_ADDRESS = 0xYourVaultAddress;
-```
-
-### Custom Response Actions
-
-Implement your own response contract with `handleVaultDrop(string)` function to take specific actions when the trap triggers.
+---
 
 ## Troubleshooting
 
-### Common Issues
+- **“Dry run enabled, not broadcasting transaction”** → `unset FOUNDRY_DRY_RUN` or use `--broadcast --skip-simulation`.
+- **TOML parse error `unexpected character '$'`** → Quote variables: `response_contract = "${RESP}"`.
+- **`cast logs` shows nothing** → Use the **positional** signature (`"VaultDrop(string)"`) and numeric block ranges.
+- **Operator warns `InsufficientPeers`** → With a single operator you can still submit; ensure ports `31313/31314` are open to improve connectivity.
 
-1. **Trap not responding**: Check vault address is correct and accessible
-2. **Operator offline**: Verify firewall settings for ports 31313/31314
-3. **Insufficient data**: Wait 3+ blocks for historical data collection
-4. **RPC issues**: Ensure RPC endpoint is stable and accessible
-
-### Debug Commands
-
-```bash
-# Check vault TVL
-cast call VAULT_ADDRESS "totalAssets()" --rpc-url YOUR_RPC_URL
-
-# Check operator logs
-docker compose logs --tail=50 drosera-operator
-
-# Verify trap deployment
-cast code TRAP_CONFIG_ADDRESS --rpc-url YOUR_RPC_URL
-```
-
-## Security Considerations
-
-- Use separate private keys for testing vs production
-- Monitor operator uptime and connectivity
-- Regularly verify trap logic with test scenarios
-- Keep RPC endpoints secure and reliable
+---
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Support
-
-For issues and questions:
-- Drosera Documentation: https://dev.drosera.io/
-- GitHub Issues: Create an issue in this repository
-- Community Discord: https://discord.gg/drosera
+MIT
